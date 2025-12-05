@@ -40,8 +40,25 @@ body {
   flex: 1;
   overflow: hidden;
   display: flex;
+  flex-direction: column;
+}
+
+.upload-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2rem;
+  padding: 2rem;
+}
+
+.error-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 2rem;
+  gap: 1rem;
 }
 
 .file-uploader {
@@ -92,8 +109,8 @@ body {
 
 .viewer-layout {
   display: flex;
-  width: 100%;
-  height: 100%;
+  flex: 1;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -257,6 +274,97 @@ body {
   background: #2ea043;
 }
 
+.console {
+  background: #0d1117;
+  border-top: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  min-height: 200px;
+}
+
+.console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+}
+
+.console-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.console-count {
+  font-size: 0.75rem;
+  color: #8b949e;
+  font-family: 'Courier New', monospace;
+}
+
+.console-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+}
+
+.console-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #8b949e;
+}
+
+.console-message {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  margin-bottom: 2px;
+  align-items: flex-start;
+}
+
+.console-message:hover {
+  background: #161b22;
+}
+
+.console-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.console-time {
+  flex-shrink: 0;
+  color: #6e7681;
+}
+
+.console-text {
+  flex: 1;
+  word-break: break-all;
+}
+
+.console-message-info {
+  color: #58a6ff;
+}
+
+.console-message-warn {
+  color: #d29922;
+}
+
+.console-message-error {
+  color: #f85149;
+}
+
+.console-message-success {
+  color: #3fb950;
+}
+
 @media (max-width: 768px) {
   .viewer-layout {
     flex-direction: column;
@@ -268,5 +376,10 @@ body {
     max-height: 40vh;
     border-right: none;
     border-bottom: 1px solid #30363d;
+  }
+
+  .console {
+    max-height: 150px;
+    min-height: 150px;
   }
 }

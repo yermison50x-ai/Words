@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileUploader } from './components/FileUploader';
 import { WldViewer } from './components/WldViewer';
 import { WorldInfo } from './components/WorldInfo';
+import { Console, ConsoleMessage } from './components/Console';
 import { WldParser, WldWorld } from './lib/WldParser';
 import './App.css';
 
@@ -10,19 +11,37 @@ function App() {
   const [filename, setFilename] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  const [consoleMessages, setConsoleMessages] = useState<ConsoleMessage[]>([]);
+
+  const addConsoleMessage = (type: 'info' | 'warn' | 'error' | 'success', message: string) => {
+    setConsoleMessages(prev => [...prev, {
+      type,
+      message,
+      timestamp: new Date()
+    }]);
+  };
 
   const handleFileLoad = async (arrayBuffer: ArrayBuffer, filename: string) => {
     setLoading(true);
     setError('');
+    setConsoleMessages([]);
 
     try {
-      const parser = new WldParser(arrayBuffer);
+      addConsoleMessage('info', `Loading file: ${filename}`);
+      addConsoleMessage('info', `File size: ${(arrayBuffer.byteLength / 1024).toFixed(2)} KB`);
+
+      const parser = new WldParser(arrayBuffer, addConsoleMessage);
       const parsedWorld = parser.parse();
+
       setWorld(parsedWorld);
       setFilename(filename);
+
+      addConsoleMessage('success', 'File loaded successfully!');
       console.log('Parsed world:', parsedWorld);
     } catch (err) {
-      setError(`Error loading file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setError(`Error loading file: ${errorMsg}`);
+      addConsoleMessage('error', `Parse failed: ${errorMsg}`);
       console.error('Parse error:', err);
     } finally {
       setLoading(false);
@@ -38,7 +57,12 @@ function App() {
 
       <main className="app-main">
         {!world && !loading && (
-          <FileUploader onFileLoad={handleFileLoad} />
+          <div className="upload-layout">
+            <FileUploader onFileLoad={handleFileLoad} />
+            {consoleMessages.length > 0 && (
+              <Console messages={consoleMessages} />
+            )}
+          </div>
         )}
 
         {loading && (
@@ -49,27 +73,35 @@ function App() {
         )}
 
         {error && (
-          <div className="error">
-            <p>{error}</p>
-            <button onClick={() => setError('')}>Try Again</button>
+          <div className="error-layout">
+            <div className="error">
+              <p>{error}</p>
+              <button onClick={() => { setError(''); setWorld(null); }}>Try Again</button>
+            </div>
+            {consoleMessages.length > 0 && (
+              <Console messages={consoleMessages} />
+            )}
           </div>
         )}
 
         {world && (
-          <div className="viewer-layout">
-            <aside className="sidebar">
-              <WorldInfo world={world} filename={filename} />
-              <button
-                className="load-new-btn"
-                onClick={() => setWorld(null)}
-              >
-                Load New File
-              </button>
-            </aside>
-            <div className="viewer-main">
-              <WldViewer world={world} />
+          <>
+            <div className="viewer-layout">
+              <aside className="sidebar">
+                <WorldInfo world={world} filename={filename} />
+                <button
+                  className="load-new-btn"
+                  onClick={() => { setWorld(null); setConsoleMessages([]); }}
+                >
+                  Load New File
+                </button>
+              </aside>
+              <div className="viewer-main">
+                <WldViewer world={world} />
+              </div>
             </div>
-          </div>
+            <Console messages={consoleMessages} />
+          </>
         )}
       </main>
     </div>
