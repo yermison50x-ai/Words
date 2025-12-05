@@ -79,6 +79,7 @@ export class WldParser {
 
       this.readState(world);
 
+      this.skipToWEND();
       this.stream.expectChunkID('WEND');
       this.log('success', 'Successfully parsed WLD file');
 
@@ -260,6 +261,27 @@ export class WldParser {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       this.log('warn', `Could not fully read world state: ${errorMsg}`);
+    }
+  }
+
+  private skipToWEND(): void {
+    this.log('info', 'Looking for WEND chunk...');
+
+    while (!this.stream.atEOF()) {
+      const currentChunk = this.stream.peekChunkID().toString();
+
+      if (currentChunk === 'WEND') {
+        this.log('success', 'Found WEND chunk');
+        return;
+      }
+
+      this.log('info', `Skipping chunk: "${currentChunk}"`);
+      this.stream.readChunkID();
+
+      const chunkSize = this.stream.readInt32();
+      if (chunkSize > 0 && chunkSize < 1000000) {
+        this.stream.seek(chunkSize, 'current');
+      }
     }
   }
 }
