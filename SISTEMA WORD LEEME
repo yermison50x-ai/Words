@@ -1,0 +1,455 @@
+SISTEMA DE LECTURA DE MUNDOS `.WLD` EN SERIOUS ENGINE 1
+=======================================================
+
+Este documento describe cómo el motor **Serious Engine 1** lee y representa internamente
+un archivo de mundo `.wld`, y cómo se conectan entre sí los distintos scripts/clases
+que participan en el proceso.
+
+Las rutas que se mencionan son las originales del motor, que tú has copiado a `Resources`
+para estudiarlas:
+
+- `Sources/Engine/World/*`
+- `Sources/Engine/Brushes/*`
+- `Sources/Engine/Terrain/*`
+- `Sources/Engine/Math/TextureMapping.h`
+- `Sources/Engine/Graphics/Texture.*`
+- `Sources/Engine/Base/Stream.*`
+- `Sources/Engine/Entities/*`
+- `Sources/Engine/Network/Network.*`
+
+
+1. ARCHIVOS PRINCIPALES DE MUNDO
+--------------------------------
+
+**Ficheros clave**
+
+- `World.h`
+- `World.cpp`
+- `WorldIO.cpp`
+
+**Clase central: `CWorld` (World.h)**
+
+`CWorld` es el objeto que representa **un mundo completo** dentro del motor. Contiene:
+
+- Referencias a:
+  - `CBrushArchive &wo_baBrushes;` → toda la geometría estática (brushes).
+  - `CTerrainArchive &wo_taTerrains;` → terrenos del mundo.
+  - `CDynamicContainer<CEntity> wo_cenAllEntities;` → todas las entidades (incluidas destruidas pero referenciadas).
+- Metadatos:
+  - `wo_strName` → nombre del nivel.
+  - `wo_strDescription` → descripción (texto de misión, intro...).
+  - `wo_ulSpawnFlags` → flags que indican en qué modos de juego se puede usar el nivel.
+  - `wo_colBackground`, backdrops (`wo_strBackdropUp/Ft/Rt`), etc.
+
+**Flujo principal de carga (WorldIO.cpp)**
+
+- `void CWorld::Load_t(const CTFileName &fnmWorld)`:
+  1. Guarda el nombre de archivo en `wo_fnmFileName`.
+  2. Abre el `.wld` con `CTFileStream`.
+  3. Llama a `_pNetwork->CheckVersion_t(strmFile, TRUE, bNeedsReinit);`.
+  4. Llama a `Read_t(&strmFile);`.
+  5. Si `bNeedsReinit` es `TRUE`, reconvierte el mundo y lo guarda de nuevo.
+
+- `void CWorld::Read_t(CTStream *pistrm)`:
+  1. Limpia datos previos (`Clear()`), bloquea estructuras (`LockAll()`).
+  2. `pistrm->ExpectID_t("WRLD");` → comprueba cabecera principal.
+  3. Llama a:
+     - `ReadBrushes_t(pistrm);` → geometría + terrenos.
+     - `ReadState_t(pistrm);`   → estado (entidades, backdrops, etc.).
+  4. `pistrm->ExpectID_t("WEND");` → fin de mundo.
+  5. Desbloquea estructuras (`UnlockAll()`).
+
+**Información de mundo (`ReadInfo_t` / `WriteInfo_t`)**
+
+En `World.h` / `WorldIO.cpp`:
+
+- `void CWorld::ReadInfo_t(CTStream *strm, BOOL bMaybeDescription);`
+- `void CWorld::WriteInfo_t(CTStream *strm);`
+
+Se encargan de leer/escribir:
+
+- Nombre (`wo_strName`).
+- Flags de spawn (`wo_ulSpawnFlags`).
+- Descripción (`wo_strDescription`).
+
+Estas funciones se usan tanto en la parte de brushes como en el estado.
+
+
+2. GEOMETRÍA DE BRUSHES (NIVEL ESTÁTICO)
+----------------------------------------
+
+**Ficheros clave**
+
+- `BrushArchive.h`
+- `BrushArchive.cpp`
+- `Brush.h`
+- `BrushIO.cpp`
+- `BrushSector.cpp`
+- `BrushBase.h`
+- `BrushTransformed.h`
+
+**`CBrushArchive` – Archivo de brushes (BrushArchive.*)**
+
+- Contiene:
+  - `CDynamicArray<CBrush3D> ba_abrBrushes;` → todos los brushes del mundo.
+  - Arrays globales de punteros a polígonos y sectores:
+    - `CStaticArray<CBrushPolygon *> ba_apbpo;`
+    - `CStaticArray<CBrushSector *> ba_apbsc;`
+
+- `void CBrushArchive::Read_t(CTStream *istrFile);`
+  - `istrFile->ExpectID_t("BRAR");` → cabecera de archivo de brushes.
+  - Lee `ctBrushes` y crea ese número de `CBrush3D`.
+  - Para cada brush:
+    - Llama a `CBrush3D::Read_t(istrFile);`.
+  - Llama a `ReadPortalSectorLinks_t(*istrFile);` para reconstruir enlaces portal-sector.
+  - `istrFile->ExpectID_t("EOAR");` → fin de archivo de brushes.
+
+**`CBrush3D`, `CBrushMip`, `CBrushSector`, `CBrushPolygon` (Brush.h / BrushIO.cpp / BrushSector.cpp)**
+
+- `CBrush3D`:
+  - Representa un “bloque” estático de mundo (paredes, salas, etc.).
+  - Tiene una lista de mips (`CBrushMip`) en `br_lhBrushMips`.
+  - `Read_t(CTStream *pistrm)`:
+    - Espera `"BR3D"`, lee versión, y delega en `Read_new_t` / `Read_old_t`.
+    - `Read_new_t`:
+      - Lee `ctMips`.
+      - Para cada mip:
+        - Crea `CBrushMip`, lo enlaza en `br_lhBrushMips`, llama a `CBrushMip::Read_new_t`.
+
+- `CBrushMip`:
+  - Un nivel de detalle (LOD) de un brush.
+  - `CDynamicArray<CBrushSector> bm_abscSectors;`
+  - `Read_new_t(CTStream *pistrm)`:
+    1. Lee distancia de mip (`bm_fMaxDistance`) desde el chunk `"BRMP"`.
+    2. Lee `ctSectors`.
+    3. Crea `bm_abscSectors`.
+    4. Para cada sector:
+       - Ajusta `bsc_pbmBrushMip = this;`.
+       - Llama a `CBrushSector::Read_t(pistrm);`.
+
+- `CBrushSector`:
+  - Representa un sector de espacio (una celda de nivel):
+    - `bsc_abvxVertices` → vértices (`CBrushVertex`).
+    - `bsc_abplPlanes`   → planos (`CBrushPlane`).
+    - `bsc_abedEdges`    → aristas (`CBrushEdge`).
+    - `bsc_abpoPolygons` → polígonos (`CBrushPolygon`).
+  - `Read_t(CTStream *pistrm)`:
+    1. Lee cabecera `"BSC "` + versión (`BSCV_*`).
+    2. Lee nombre, color, luz ambiente, flags (`bsc_ulFlags`, etc.).
+    3. `"VTXs"`:
+       - Lee `ctVertices`.
+       - Crea `bsc_abvxVertices` y lee, para cada vértice:
+         - `bvx_vdPreciseRelative` (coordenadas dobles relativas).
+       - También mantiene `bvx_vAbsolute` y punteros a sector.
+    4. `"PLNs"`:
+       - Lee `ctPlanes`.
+       - Crea `bsc_abplPlanes` y lee `bpl_pldPreciseRelative`.
+    5. `"EDGs"`:
+       - Lee `ctEdges`.
+       - Crea `bsc_abedEdges` y `bsc_awedEdges`.
+       - Para cada edge, lee los índices de vértices y los vincula.
+    6. `"BPOs"`:
+       - Lee versión (`BPOV_*`) y `ctPolygons`.
+       - Para cada `CBrushPolygon`:
+         - Índice de plano → `bpo_pbplPlane`.
+         - Color, flags.
+         - **Texturas**: `bpo_abptTextures[0..2].Read_t`.
+         - Propiedades adicionales (`bpo_bppProperties`).
+         - Lista de `CBrushPolygonEdge` (edges + flag de reverso).
+         - Triangulación:
+           - `bpo_apbvxTriangleVertices` → punteros a vértices.
+           - `bpo_aiTriangleElements` → índices (grupos de 3 forman triángulos).
+         - Shadowmap (`bpo_smShadowMap.Read_t`) + color de sombra.
+    7. Opcionalmente, chunk `"BSP0"` → árbol BSP precomputado de sector.
+
+- `CBrushPolygon`:
+  - Es el polígono real usado para colisión/render:
+    - Geometría:
+      - `bpo_apbvxTriangleVertices` → lista de vértices de triángulo.
+      - `bpo_aiTriangleElements`    → índices.
+    - Apariencia:
+      - `bpo_abptTextures[3]` → hasta 3 capas de textura.
+      - `bpo_mdShadow`        → mapeado para sombras.
+      - `bpo_bppProperties`   → tipo de superficie, iluminación, etc.
+
+**Cómo representan el mundo**
+
+A partir de todas estas estructuras, el motor tiene:
+
+- Una malla de mundo formada por:
+  - Vértices 3D (`CBrushVertex::bvx_vAbsolute`).
+  - Triángulos (`bpo_aiTriangleElements` + `bpo_apbvxTriangleVertices`).
+  - Materiales y texturas por polígono (`CBrushPolygonTexture`).
+- Sectores (`CBrushSector`) organizados en brushes (`CBrush3D`) para colisión, visibilidad y portales.
+
+
+3. TERRENOS
+-----------
+
+**Ficheros clave**
+
+- `TerrainArchive.h`
+- `TerrainArchive.cpp`
+- `Terrain.h`
+- `Terrain.cpp`
+
+**`CTerrainArchive`**
+
+- `CDynamicArray<CTerrain> ta_atrTerrains;`
+- `CWorld *ta_pwoWorld;`
+- `Read_t(CTStream *istrFile)`:
+  - `ExpectID_t("TRAR");` → cabecera de archivo de terrenos.
+  - Lee `ctTerrains`.
+  - Para cada `CTerrain`, llama a `Read_t`.
+  - `ExpectID_t("EOTA");` → fin de archivo de terrenos.
+
+**Integración con `CWorld`**
+
+En `CWorld::ReadBrushes_t` (WorldIO.cpp):
+
+- Tras `wo_baBrushes.Read_t(istrm)`:
+  - Si `istrm->PeekID_t()==CChunkID("TRAR")`:
+    - Llama a `wo_taTerrains.Read_t(istrm)` para cargar los terrenos.
+
+Los terrenos amplían la geometría del mundo con superficies de terreno continuo
+que se integran con los brushes.
+
+
+4. MAPEADO DE TEXTURAS Y UV
+---------------------------
+
+**Fichero clave**
+
+- `TextureMapping.h`
+
+**Clases principales**
+
+- `CMappingVectors`:
+  - Define vectores U/V y origen de un mapeado en un plano:
+    - `FLOAT3D mv_vO;` → origen.
+    - `FLOAT3D mv_vU;` → eje U.
+    - `FLOAT3D mv_vV;` → eje V.
+  - Métodos:
+    - `void FromPlane(const FLOATplane3D &plPlane);`
+      → construye vectores U/V a partir del plano del polígono.
+
+- `CMappingDefinition`:
+  - Describe cómo se transforma el mapeado por defecto del plano:
+    - `md_fUoS`, `md_fUoT`, `md_fVoS`, `md_fVoT` → transformación lineal.
+    - `md_fUOffset`, `md_fVOffset` → desplazamientos.
+  - Función clave:
+    - `void GetTextureCoordinates(const CMappingVectors &mvDefault, const FLOAT3D &vSpace, MEX2D &vTexture) const;`
+      → dado un punto en espacio de objeto (`vSpace`) y los vectores de mapeo
+         por defecto (`mvDefault`), devuelve las coordenadas `(u,v)` de textura.
+
+**Relación con polígonos (Brush.h)**:
+
+- Cada `CBrushPolygonTexture` contiene:
+  - `CMappingDefinition bpt_mdMapping;`
+  - Esto se usa para calcular las UV de cada vértice del polígono:
+    1. Obtienes el plano del polígono: `bpo_pbplPlane->bpl_plAbsolute`.
+    2. `CMappingVectors mvDefault; mvDefault.FromPlane(plano);`
+    3. Para un vértice con posición `bvx_vAbsolute`:
+       - `bpt_mdMapping.GetTextureCoordinates(mvDefault, vAbsolute, texUV);`
+
+Así se “proyecta” la textura correctamente sobre la superficie de cada polígono.
+
+
+5. TEXTURAS Y DATOS DE IMAGEN
+-----------------------------
+
+**Ficheros clave**
+
+- `Texture.h`
+- `Texture.cpp`
+
+**`CTextureData`**
+
+- Representa la **imagen real** de una textura:
+  - Dimensiones, mipmaps, frames.
+  - Punteros a los datos de píxeles (`td_pulFrames`).
+  - Flags de formato (`td_ulFlags`).
+
+Funciones relevantes:
+
+- `void Read_t(CTStream *inFile);`
+  → lee la textura desde su archivo (`.tex`).
+- `void Export_t(CImageInfo &iiExportedImage, INDEX iFrame);`
+  → exporta el mipmap de mayor calidad a una estructura de imagen (`CImageInfo`),
+    útil para convertir a PNG/TGA, etc.
+
+**`CTextureObject`**
+
+- Es una instancia de textura que se asocia a polígonos:
+  - `void SetData_t(const CTFileName &fnmTexture);`
+    → carga/obtiene un `CTextureData` para ese nombre de archivo.
+  - `const CTFileName &GetName(void);`
+    → devuelve el nombre de archivo de la textura.
+
+En `CBrushPolygonTexture::Read_t` (BrushIO.cpp) se usa `SetTextureWithPossibleReplacing_t`
+para cargar la textura y asociarla a cada polígono.
+
+
+6. SISTEMA DE STREAMS Y CHUNKS (LECTURA BINARIA DEL `.WLD`)
+-----------------------------------------------------------
+
+**Ficheros clave**
+
+- `Stream.h`
+- `Stream.cpp`
+- `ReplaceFile.h`
+
+**Clases**
+
+- `CTStream`:
+  - Clase base abstracta de stream.
+  - Soporta:
+    - Lectura/escritura de tipos primitivos y estructuras.
+    - Lectura/escritura de IDs de chunks:
+      - `WriteID_t("WRLD");`
+      - `ExpectID_t("WRLD");`
+    - Mecanismo de diccionario:
+      - `DictionaryReadBegin_t()`, `DictionaryPreload_t()`, `DictionaryReadEnd_t()`.
+      - `DictionaryWriteBegin_t()`, `DictionaryWriteEnd_t()`.
+
+- `CTFileStream`:
+  - Implementación concreta sobre archivos en disco:
+    - `Open_t`, `Create_t`, `Close`.
+
+**Cómo se usan en el `.wld`**
+
+- `WorldIO.cpp`:
+  - Usa `CTFileStream` para abrir/crear el `.wld`.
+  - Marca bloques de datos con IDs (`"WRLD"`, `"WSTA"`, `"WEND"`, `"BRAR"`, `"TRAR"`, `"BR3D"`, `"BSC "`, `"VTXs"`, `"PLNs"`, `"EDGs"`, `"BPOs"`, etc.).
+  - Usa el diccionario para almacenar y reutilizar nombres de archivos (texturas, modelos),
+    reduciendo duplicaciones y permitiendo reescritura parcial de diccionarios.
+
+- `BrushIO.cpp` / `TerrainArchive.cpp` / `Entity.cpp`:
+  - Cada clase sabe leer/escribir su parte específica, siempre usando `CTStream` como
+    interfaz común.
+
+El sistema de streams y diccionarios es lo que da cohesión al formato `.wld` y hace
+posible que se lean estructuras complejas con referencias cruzadas de forma consistente.
+
+
+7. ENTIDADES Y ESTADO DEL MUNDO
+-------------------------------
+
+**Ficheros clave**
+
+- `Entity.h`
+- `Entity.cpp`
+- `EntityClass.h`
+- `EntityClass.cpp`
+- `InternalClasses.h`
+- (Integración en) `WorldIO.cpp`
+
+**Lectura del estado (`ReadState_t` en WorldIO.cpp)**:
+
+- `void CWorld::ReadState_t(CTStream *istr)`:
+  1. Inicia diccionario de estado:
+     - `wo_slStateDictionaryOffset = istr->DictionaryReadBegin_t();`
+     - `istr->DictionaryPreload_t();`
+  2. `istr->ExpectID_t("WSTA");` → estado del mundo.
+  3. Lee versión (`iSavedVersion`).
+  4. Llama a la variante apropiada:
+     - `ReadState_new_t(istr);`
+     - o `ReadState_old_t(istr);`
+     - o `ReadState_veryold_t(istr);`
+  5. `istr->DictionaryReadEnd_t();`
+  6. Puede llamar a `PrecacheEntities_t();` según políticas de precarga.
+
+- `ReadState_new_t` (versión actual):
+  - Lee `ReadInfo_t(istr, TRUE)` → nombre/flags/descripcion.
+  - Lee color de fondo, ID siguiente de entidad (`wo_ulNextEntityID`).
+  - Lee backdrops y viewer (posición de cámara, thumbnail, etc.).
+  - Lee entidades usando chunks `"ENs2"` / `"ENTs"`:
+    - Primer pase:
+      - Para cada entidad:
+        - Lee ID (si `ENs2` con IDs).
+        - Lee nombre de clase (`CTFileName fnmClass`) + `CPlacement3D`.
+        - Llama a `CreateEntity_t(plPlacement, fnmClass);`.
+    - Segundo pase:
+      - Para cada entidad:
+        - `wo_cenAllEntities[i].Read_t(istr);` → cada entidad carga sus propiedades.
+  - Después:
+    - Ajusta entidad de fondo (`SetBackgroundViewer`).
+    - Elimina entidades marcadas como destruidas.
+    - Recalcula bounding boxes (`wo_baBrushes.CalculateBoundingBoxes();`).
+    - Crea/enlaza portales y sectores (`wo_baBrushes.LinkPortalsAndSectors();`).
+    - Lee enlaces entidad-sector (`wo_baBrushes.ReadEntitySectorLinks_t(*istr);`).
+    - Llama a `LinkEntitiesToSectors();`.
+
+**`CEntity` y `CEntityClass`**
+
+- `CEntity`:
+  - Representa cualquier objeto dinámico del mundo:
+    - Jugadores, enemigos, items, triggers, luces dinámicas, etc.
+  - Contiene:
+    - `en_plPlacement` → posición/orientación.
+    - `en_ulID` → ID único.
+    - `en_pecClass` → puntero a la clase de entidad (`CEntityClass`).
+  - Serialización:
+    - `void Read_t(CTStream *istr);`
+    - `void Write_t(CTStream *ostr);`
+
+- `CEntityClass` / `InternalClasses.h`:
+  - Gestionan el catálogo de clases de entidades:
+    - Cargan definiciones desde scripts `.es` (Entity Scripts).
+    - Permiten crear instancias a partir de un nombre (`fnmClass`).
+
+El conjunto `CWorld` + `CBrushArchive` + `CTerrainArchive` + `CEntity` representa
+**la escena completa**: geometría estática, terrenos y todos los objetos dinámicos.
+
+
+8. VERSIÓN DE ENGINE EN EL `.WLD` (CABECERA)
+--------------------------------------------
+
+**Ficheros clave**
+
+- `Network.h`
+- `Network.cpp`
+
+**Funciones usadas por `CWorld` (WorldIO.cpp)**:
+
+- `_pNetwork->WriteVersion_t(strm);`
+  - Se llama en `CWorld::Save_t`.
+  - Escribe en el `.wld` información de la versión del engine para compatibilidad.
+
+- `_pNetwork->CheckVersion_t(strm, BOOL bAllowReinit, BOOL &bNeedsReinit);`
+  - Se llama en `CWorld::Load_t`.
+  - Lee la versión grabada en el archivo y:
+    - Comprueba si el `.wld` se puede cargar con la versión actual del engine.
+    - Si es necesario, marca `bNeedsReinit = TRUE` para que el mundo sea
+      reconvertido y guardado en formato nuevo.
+
+Este mecanismo permite que versiones nuevas del engine sigan abriendo mundos
+creados con versiones antiguas, aplicando conversiones internas cuando hace falta.
+
+
+RESUMEN FINAL
+-------------
+
+Cuando el motor carga un `.wld`:
+
+1. `CWorld::Load_t` abre el archivo, verifica la versión de engine y llama a `Read_t`.
+2. `Read_t` lee `"WRLD"` y llama a:
+   - `ReadBrushes_t`:
+     - Usa `CBrushArchive::Read_t` para reconstruir brushes:
+       - `CBrush3D` → `CBrushMip` → `CBrushSector` → `CBrushPolygon`.
+     - Usa `CTerrainArchive::Read_t` para terrenos.
+   - `ReadState_t`:
+     - Lee `"WSTA"` y ejecuta `ReadState_new_t` (u otra variante) para entidades.
+3. `Stream.*` y el sistema de diccionarios se encargan de la lectura binaria, chunks
+   e internamente resuelven nombres de texturas, modelos, clases de entidades, etc.
+4. `TextureMapping.h` + `Texture.*` conectan **geometría** con **apariencia**:
+   - UVs correctos por vértice.
+   - Texturas reales cargadas en memoria.
+5. `Entity.*` y `EntityClass.*` rellenan el mundo con todos los actores dinámicos.
+
+El resultado es un objeto `CWorld` completamente poblado que representa la escena 3D
+del nivel (brushes, terrenos, texturas, entidades) tal y como la ve el motor en tiempo
+de ejecución. Sobre esta representación interna se apoya el render, la física, la IA
+y cualquier herramienta de edición o exportación que construyas encima.
+
+
