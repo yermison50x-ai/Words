@@ -135,101 +135,76 @@ export class WldParser {
       this.log('warn', 'No WLIF chunk found, skipping world info');
     }
 
-    this.skipDictionary();
-    this.skipBrushData();
-  }
+    let dictionaryPosition = -1;
 
-  private skipDictionary(): void {
-    try {
-      const nextChunk = this.stream.peekChunkID();
+    const dposChunk = this.stream.peekChunkID();
+    if (dposChunk.toString() === 'DPOS') {
+      this.log('info', 'Found DPOS (Dictionary Position) chunk');
+      this.stream.expectChunkID('DPOS');
+      dictionaryPosition = this.stream.readInt32();
+      this.log('info', `Dictionary stored at position: ${dictionaryPosition}`);
+    }
 
-      if (nextChunk.toString() === 'DPOS') {
-        this.log('info', 'Found DPOS (Dictionary Position) chunk');
-        this.stream.expectChunkID('DPOS');
+    this.log('info', 'Searching for WSTA chunk in file...');
+    const wstaPosition = this.findChunkInFile('WSTA');
 
-        const dictionaryPosition = this.stream.readInt32();
-        this.log('info', `Dictionary position: ${dictionaryPosition}`);
+    if (wstaPosition !== -1) {
+      this.log('success', `Found WSTA at position: ${wstaPosition}`);
+      this.stream.setPosition(wstaPosition);
 
-        const currentPos = this.stream.getPosition();
-        this.log('info', `Current position: ${currentPos}, jumping to dictionary at ${dictionaryPosition}`);
-
-        this.stream.setPosition(dictionaryPosition);
-
-        this.stream.expectChunkID('DICT');
-        const fileNameCount = this.stream.readInt32();
-        this.log('info', `Dictionary contains ${fileNameCount} filenames`);
-
-        for (let i = 0; i < fileNameCount; i++) {
-          const fnLength = this.stream.readInt32();
-          if (fnLength > 0 && fnLength < 500) {
-            const filename = this.stream.readString(fnLength);
-            if (i < 3) {
-              this.log('info', `  File ${i + 1}: ${filename}`);
-            }
-          }
-        }
-
-        this.stream.expectChunkID('DEND');
-        this.log('success', 'Dictionary read complete, continuing to next section');
-      } else if (nextChunk.toString() === 'DIMP') {
-        this.log('info', 'Found DIMP (Dictionary Import) chunk');
-        this.stream.expectChunkID('DIMP');
-
-        const fnLength = this.stream.readInt32();
-        if (fnLength > 0 && fnLength < 500) {
-          const importFilename = this.stream.readString(fnLength);
-          this.log('info', `Importing dictionary from: ${importFilename}`);
-        }
-        const importOffset = this.stream.readInt32();
-        this.log('info', `Import offset: ${importOffset}`);
-
-        if (this.stream.peekChunkID().toString() === 'DPOS') {
-          this.skipDictionary();
-        }
-      } else {
-        this.log('info', 'No dictionary found, continuing');
+      if (dictionaryPosition !== -1 && dictionaryPosition < wstaPosition) {
+        this.log('info', 'Reading dictionary information...');
+        this.readDictionaryInfo(dictionaryPosition);
       }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      this.log('warn', `Error skipping dictionary: ${errorMsg}`);
+    } else {
+      this.log('error', 'Could not find WSTA chunk');
+      throw new Error('WSTA chunk not found in file');
     }
   }
 
-  private skipBrushData(): void {
+  private findChunkInFile(chunkID: string): number {
+    const fileSize = this.stream.getSize();
+    const startPos = this.stream.getPosition();
+
+    for (let i = startPos; i < fileSize - 4; i++) {
+      this.stream.setPosition(i);
+      const chunk = this.stream.peekChunkID().toString();
+
+      if (chunk === chunkID) {
+        return i;
+      }
+    }
+
+    this.stream.setPosition(startPos);
+    return -1;
+  }
+
+  private readDictionaryInfo(position: number): void {
     try {
-      let chunkId = this.stream.peekChunkID().toString();
+      const savedPosition = this.stream.getPosition();
 
-      while (chunkId !== 'WSTA' && !this.stream.atEOF()) {
-        const chunk = this.stream.readChunkID();
-        this.log('info', `Skipping chunk: "${chunk.toString()}"`);
+      this.stream.setPosition(position);
+      this.stream.expectChunkID('DICT');
 
-        if (chunk.toString() === 'WSTA') {
-          this.stream.seek(-4, 'current');
-          break;
-        }
+      const fileNameCount = this.stream.readInt32();
+      this.log('success', `Dictionary contains ${fileNameCount} textures/resources`);
 
-        if (chunk.toString() === 'TRAR') {
-          this.log('info', 'Found terrain archive, skipping...');
-        }
-
-        const size = this.stream.readInt32();
-        this.log('info', `  Chunk size: ${size} bytes`);
-
-        if (size > 0 && size < this.stream.getSize()) {
-          this.stream.seek(size, 'current');
-        }
-
-        chunkId = this.stream.peekChunkID().toString();
-
-        if (chunkId === 'WSTA' || chunkId === 'WEND') {
-          break;
+      for (let i = 0; i < Math.min(fileNameCount, 3); i++) {
+        const fnLength = this.stream.readInt32();
+        if (fnLength > 0 && fnLength < 500) {
+          const filename = this.stream.readString(fnLength);
+          this.log('info', `  [${i + 1}] ${filename}`);
         }
       }
 
-      this.log('success', 'Brush data skipped successfully');
+      if (fileNameCount > 3) {
+        this.log('info', `  ... and ${fileNameCount - 3} more resources`);
+      }
+
+      this.stream.setPosition(savedPosition);
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      this.log('warn', `Error skipping brush data: ${errorMsg}`);
+      this.log('warn', 'Could not read dictionary details');
+      this.stream.setPosition(this.stream.getPosition());
     }
   }
 
