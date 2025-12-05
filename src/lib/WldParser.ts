@@ -423,7 +423,27 @@ export class WldParser {
         }
       }
 
-      this.skipShadowMap();
+      // Read shadow map layers count
+      const shadowLayerCount = this.stream.readInt32();
+
+      // Skip shadow map data (complex structure, not fully parsed)
+      // If there are layers, we skip them for now
+      if (shadowLayerCount > 0 && shadowLayerCount < 100) {
+        for (let l = 0; l < shadowLayerCount; l++) {
+          // Skip layer header
+          this.stream.seek(8 * 4, 'current'); // 8 int32 fields
+          this.stream.seek(4 * 4, 'current'); // 4 float32 fields
+
+          // Skip mip data
+          const mipWidth = this.stream.readInt32();
+          const mipHeight = this.stream.readInt32();
+
+          if (mipWidth > 0 && mipHeight > 0 && mipWidth < 2048 && mipHeight < 2048) {
+            const pixelBytes = mipWidth * mipHeight * 4;
+            this.stream.seek(pixelBytes, 'current');
+          }
+        }
+      }
 
       if (version >= 2) {
         this.stream.readUInt32(); // shadow color
@@ -461,29 +481,39 @@ export class WldParser {
     this.stream.seek(4, 'current'); // COLOR (colColor - 4 bytes)
   }
 
-  private skipShadowMap(): void {
-    try {
-      const smID = this.stream.peekChunkID();
-      if (smID.toString() === 'SHMP') {
-        this.stream.expectChunkID('SHMP');
-        const size = this.stream.readInt32();
-        if (size > 0 && size < 10000000) {
-          this.stream.seek(size, 'current');
-        }
-      }
-    } catch (error) {
-      // Shadow map is optional
-    }
-  }
-
   private skipBSPTree(): void {
     try {
-      const nodeCount = this.stream.readInt32();
-      if (nodeCount > 0 && nodeCount < 1000000) {
-        this.stream.seek(nodeCount * 48, 'current'); // Skip BSP nodes
+      const bspNodeCount = this.stream.readInt32();
+
+      if (bspNodeCount === 0) {
+        return;
+      }
+
+      if (bspNodeCount < 0 || bspNodeCount > 100000) {
+        this.log('warn', `Invalid BSP node count: ${bspNodeCount}`);
+        return;
+      }
+
+      for (let i = 0; i < bspNodeCount; i++) {
+        this.stream.readInt32(); // plane index
+        this.stream.readInt32(); // front node index
+        this.stream.readInt32(); // back node index
+
+        this.stream.readFloat64(); // plane normal x
+        this.stream.readFloat64(); // plane normal y
+        this.stream.readFloat64(); // plane normal z
+        this.stream.readFloat64(); // plane distance
+
+        this.stream.readFloat64(); // bbox min x
+        this.stream.readFloat64(); // bbox min y
+        this.stream.readFloat64(); // bbox min z
+
+        this.stream.readFloat64(); // bbox max x
+        this.stream.readFloat64(); // bbox max y
+        this.stream.readFloat64(); // bbox max z
       }
     } catch (error) {
-      this.log('warn', 'Could not skip BSP tree');
+      this.log('warn', `Could not skip BSP tree: ${error}`);
     }
   }
 
@@ -588,9 +618,17 @@ export class WldParser {
       const fileNameCount = this.stream.readInt32();
       this.log('success', `Dictionary contains ${fileNameCount} textures/resources`);
 
+      if (fileNameCount < 0 || fileNameCount > 10000) {
+        throw new Error(`Invalid filename count in dictionary: ${fileNameCount}`);
+      }
+
       for (let i = 0; i < fileNameCount; i++) {
         const fnLength = this.stream.readInt32();
-        if (fnLength > 0 && fnLength < 500) {
+        if (fnLength < 0 || fnLength > 10000) {
+          throw new Error(`Invalid filename length at index ${i}: ${fnLength}`);
+        }
+
+        if (fnLength > 0) {
           const filename = this.stream.readString(fnLength);
           if (i < 3) {
             this.log('info', `  [${i + 1}] ${filename}`);
