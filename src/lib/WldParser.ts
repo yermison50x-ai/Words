@@ -156,12 +156,16 @@ export class WldParser {
       }
     }
 
-    let brushDictionaryPosition = -1;
+    let dictionaryEndPosition = -1;
     if (this.stream.peekChunkID().toString() === 'DPOS') {
       this.log('info', 'Found DPOS (Dictionary Position) for brushes');
       this.stream.expectChunkID('DPOS');
-      brushDictionaryPosition = this.stream.readInt32();
-      this.log('info', `Brush dictionary stored at position: ${brushDictionaryPosition}`);
+      const dictionaryPosition = this.stream.readInt32();
+      this.log('info', `Brush dictionary stored at position: ${dictionaryPosition}`);
+
+      const continuePosition = this.stream.getPosition();
+      dictionaryEndPosition = this.readDictionary(dictionaryPosition);
+      this.stream.setPosition(continuePosition);
     }
 
     if (this.stream.peekChunkID().toString() === 'BRAR') {
@@ -175,9 +179,9 @@ export class WldParser {
       this.skipTerrainArchive();
     }
 
-    if (brushDictionaryPosition !== -1) {
-      this.log('info', 'Reading brush dictionary information...');
-      this.readDictionaryInfo(brushDictionaryPosition);
+    if (dictionaryEndPosition !== -1) {
+      this.log('info', `Jumping to end of dictionary at position: ${dictionaryEndPosition}`);
+      this.stream.setPosition(dictionaryEndPosition);
     }
 
     this.log('info', 'Searching for WSTA chunk in file...');
@@ -576,21 +580,21 @@ export class WldParser {
     return -1;
   }
 
-  private readDictionaryInfo(position: number): void {
+  private readDictionary(position: number): number {
     try {
-      const savedPosition = this.stream.getPosition();
-
       this.stream.setPosition(position);
       this.stream.expectChunkID('DICT');
 
       const fileNameCount = this.stream.readInt32();
       this.log('success', `Dictionary contains ${fileNameCount} textures/resources`);
 
-      for (let i = 0; i < Math.min(fileNameCount, 3); i++) {
+      for (let i = 0; i < fileNameCount; i++) {
         const fnLength = this.stream.readInt32();
         if (fnLength > 0 && fnLength < 500) {
           const filename = this.stream.readString(fnLength);
-          this.log('info', `  [${i + 1}] ${filename}`);
+          if (i < 3) {
+            this.log('info', `  [${i + 1}] ${filename}`);
+          }
         }
       }
 
@@ -598,10 +602,14 @@ export class WldParser {
         this.log('info', `  ... and ${fileNameCount - 3} more resources`);
       }
 
-      this.stream.setPosition(savedPosition);
+      this.stream.expectChunkID('DEND');
+      const dictionaryEndPosition = this.stream.getPosition();
+      this.log('info', `Dictionary ends at position: ${dictionaryEndPosition}`);
+
+      return dictionaryEndPosition;
     } catch (error) {
-      this.log('warn', 'Could not read dictionary details');
-      this.stream.setPosition(this.stream.getPosition());
+      this.log('warn', `Could not read dictionary: ${error}`);
+      return -1;
     }
   }
 
@@ -650,12 +658,16 @@ export class WldParser {
         }
       }
 
-      let stateDictionaryPosition = -1;
+      let stateDictionaryEndPosition = -1;
       if (this.stream.peekChunkID().toString() === 'DPOS') {
         this.log('info', 'Found DPOS (Dictionary Position) before WSTA');
         this.stream.expectChunkID('DPOS');
-        stateDictionaryPosition = this.stream.readInt32();
+        const stateDictionaryPosition = this.stream.readInt32();
         this.log('info', `State dictionary stored at position: ${stateDictionaryPosition}`);
+
+        const continuePosition = this.stream.getPosition();
+        stateDictionaryEndPosition = this.readDictionary(stateDictionaryPosition);
+        this.stream.setPosition(continuePosition);
       }
 
       this.log('info', 'Reading world state (WSTA)');
@@ -671,9 +683,9 @@ export class WldParser {
       world.backgroundColor = this.stream.readUInt32();
       this.log('success', `Background color: #${world.backgroundColor.toString(16).padStart(8, '0')}`);
 
-      if (stateDictionaryPosition !== -1) {
-        this.log('info', 'Reading state dictionary information...');
-        this.readDictionaryInfo(stateDictionaryPosition);
+      if (stateDictionaryEndPosition !== -1) {
+        this.log('info', `Jumping to end of state dictionary at position: ${stateDictionaryEndPosition}`);
+        this.stream.setPosition(stateDictionaryEndPosition);
       }
 
     } catch (error) {
