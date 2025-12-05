@@ -612,11 +612,38 @@ export class WldParser {
 
   private readDictionary(position: number): number {
     try {
+      this.log('info', `Jumping to dictionary position: ${position}`);
       this.stream.setPosition(position);
+
+      // Log what we see at this position
+      const chunkAtPos = this.stream.peekChunkID();
+      this.log('info', `Chunk ID at dictionary position: "${chunkAtPos}"`);
+
+      // Check if we need to skip some bytes first
+      if (chunkAtPos.toString() !== 'DICT') {
+        this.log('warn', `Expected DICT but found "${chunkAtPos}"`);
+
+        // Try to find DICT nearby
+        let foundDict = false;
+        for (let offset = 0; offset < 100; offset += 4) {
+          this.stream.setPosition(position + offset);
+          const testChunk = this.stream.peekChunkID();
+          if (testChunk.toString() === 'DICT') {
+            this.log('info', `Found DICT at offset +${offset} bytes`);
+            foundDict = true;
+            break;
+          }
+        }
+
+        if (!foundDict) {
+          throw new Error('Could not find DICT chunk near specified position');
+        }
+      }
+
       this.stream.expectChunkID('DICT');
 
       const fileNameCount = this.stream.readInt32();
-      this.log('success', `Dictionary contains ${fileNameCount} textures/resources`);
+      this.log('success', `Dictionary contains ${fileNameCount} filenames`);
 
       if (fileNameCount < 0 || fileNameCount > 10000) {
         throw new Error(`Invalid filename count in dictionary: ${fileNameCount}`);
@@ -624,7 +651,9 @@ export class WldParser {
 
       for (let i = 0; i < fileNameCount; i++) {
         const fnLength = this.stream.readInt32();
+
         if (fnLength < 0 || fnLength > 10000) {
+          this.log('warn', `Invalid filename length at index ${i}: ${fnLength} (pos: ${this.stream.getPosition() - 4})`);
           throw new Error(`Invalid filename length at index ${i}: ${fnLength}`);
         }
 
