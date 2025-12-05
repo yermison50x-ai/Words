@@ -98,6 +98,12 @@ export class BinaryStream {
   }
 
   readString(length: number): string {
+    if (length < 0 || length > 1000000) {
+      throw new Error(`Invalid string length: ${length} at position ${this.position}`);
+    }
+    if (this.position + length > this.buffer.byteLength) {
+      throw new Error(`Cannot read ${length} bytes at position ${this.position}, buffer size is ${this.buffer.byteLength}`);
+    }
     const bytes = new Uint8Array(this.buffer.buffer, this.position, length);
     this.position += length;
     return new TextDecoder().decode(bytes);

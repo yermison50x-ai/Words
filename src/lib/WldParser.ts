@@ -452,8 +452,9 @@ export class WldParser {
     if (filenameLength > 0 && filenameLength < 500) {
       this.stream.seek(filenameLength, 'current');
     }
-    this.stream.seek(64, 'current'); // mapping definition
-    this.stream.seek(8, 'current'); // texture properties
+    this.stream.seek(24, 'current'); // CMappingDefinition (6 floats = 24 bytes)
+    this.stream.seek(4, 'current'); // 4 unsigned bytes (scroll, blend, flags, dummy)
+    this.stream.seek(4, 'current'); // COLOR (colColor - 4 bytes)
   }
 
   private skipShadowMap(): void {
