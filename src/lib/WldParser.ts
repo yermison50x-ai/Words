@@ -265,23 +265,34 @@ export class WldParser {
   }
 
   private skipToWEND(): void {
-    this.log('info', 'Looking for WEND chunk...');
+    this.log('info', 'Searching for WEND chunk in remaining data...');
+
+    const wendBytes = new TextEncoder().encode('WEND');
 
     while (!this.stream.atEOF()) {
-      const currentChunk = this.stream.peekChunkID().toString();
+      const currentPos = this.stream.getPosition();
 
-      if (currentChunk === 'WEND') {
-        this.log('success', 'Found WEND chunk');
+      if (this.stream.getSize() - currentPos < 4) {
+        break;
+      }
+
+      const bytes = new Uint8Array(4);
+      for (let i = 0; i < 4; i++) {
+        bytes[i] = this.stream.readUInt8();
+      }
+
+      if (bytes[0] === wendBytes[0] &&
+          bytes[1] === wendBytes[1] &&
+          bytes[2] === wendBytes[2] &&
+          bytes[3] === wendBytes[3]) {
+        this.stream.seek(-4, 'current');
+        this.log('success', `Found WEND at position ${this.stream.getPosition()}`);
         return;
       }
 
-      this.log('info', `Skipping chunk: "${currentChunk}"`);
-      this.stream.readChunkID();
-
-      const chunkSize = this.stream.readInt32();
-      if (chunkSize > 0 && chunkSize < 1000000) {
-        this.stream.seek(chunkSize, 'current');
-      }
+      this.stream.seek(-3, 'current');
     }
+
+    this.log('warn', 'WEND chunk not found, file may be incomplete');
   }
 }
