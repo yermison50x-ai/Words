@@ -19,15 +19,28 @@ export interface WldEntity {
 
 export interface WldBrush {
   id: number;
+  mips: WldBrushMip[];
+}
+
+export interface WldBrushMip {
+  maxDistance: number;
   sectors: WldSector[];
 }
 
 export interface WldSector {
+  name: string;
+  color: number;
+  ambient: number;
+  flags: number;
+  vertices: Vector3[];
   polygons: WldPolygon[];
 }
 
 export interface WldPolygon {
   vertices: Vector3[];
+  indices: number[];
+  color: number;
+  flags: number;
   textureMapping?: string;
 }
 
@@ -132,8 +145,10 @@ export class WldParser {
 
     if (nextChunk.toString() === 'WLIF') {
       this.readWorldInfo(world);
+    } else if (nextChunk.toString() === 'BRAR') {
+      this.readBrushArchive(world);
     } else {
-      this.log('warn', 'No WLIF chunk found, skipping world info');
+      this.log('warn', 'No WLIF or BRAR chunk found, skipping');
     }
 
     let dictionaryPosition = -1;
@@ -160,6 +175,312 @@ export class WldParser {
     } else {
       this.log('error', 'Could not find WSTA chunk');
       throw new Error('WSTA chunk not found in file');
+    }
+  }
+
+  private readBrushArchive(world: WldWorld): void {
+    try {
+      this.log('info', 'Reading brush archive (BRAR)');
+      this.stream.expectChunkID('BRAR');
+
+      const brushCount = this.stream.readInt32();
+      this.log('success', `Found ${brushCount} brushes in archive`);
+
+      for (let i = 0; i < brushCount; i++) {
+        this.log('info', `Reading brush ${i + 1}/${brushCount}`);
+        const brush = this.readBrush3D();
+        if (brush) {
+          brush.id = i;
+          world.brushes.push(brush);
+        }
+      }
+
+      const endChunk = this.stream.peekChunkID();
+      if (endChunk.toString() === 'PSLS') {
+        this.log('info', 'Skipping portal-sector links (PSLS)');
+        this.skipPortalSectorLinks();
+      }
+
+      if (this.stream.peekChunkID().toString() === 'EOAR') {
+        this.stream.expectChunkID('EOAR');
+        this.log('success', 'End of brush archive (EOAR)');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Could not fully read brush archive: ${errorMsg}`);
+    }
+  }
+
+  private readBrush3D(): WldBrush | null {
+    try {
+      this.stream.expectChunkID('BR3D');
+
+      const version = this.stream.readInt32();
+      this.log('info', `Brush version: ${version}`);
+
+      const mipCount = this.stream.readInt32();
+      this.log('info', `Brush has ${mipCount} mip levels`);
+
+      const brush: WldBrush = {
+        id: 0,
+        mips: []
+      };
+
+      for (let i = 0; i < mipCount; i++) {
+        const mip = this.readBrushMip();
+        if (mip) {
+          brush.mips.push(mip);
+        }
+      }
+
+      this.stream.expectChunkID('BREN');
+      this.log('success', 'Brush read successfully');
+
+      return brush;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Could not read brush: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  private readBrushMip(): WldBrushMip | null {
+    try {
+      let maxDistance = 1000000.0;
+
+      if (this.stream.peekChunkID().toString() === 'BRMP') {
+        this.stream.expectChunkID('BRMP');
+        maxDistance = this.stream.readFloat32();
+      }
+
+      const sectorCount = this.stream.readInt32();
+      this.log('info', `Mip has ${sectorCount} sectors`);
+
+      const mip: WldBrushMip = {
+        maxDistance,
+        sectors: []
+      };
+
+      for (let i = 0; i < sectorCount; i++) {
+        const sector = this.readBrushSector();
+        if (sector) {
+          mip.sectors.push(sector);
+        }
+      }
+
+      return mip;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Could not read brush mip: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  private readBrushSector(): WldSector | null {
+    try {
+      this.stream.expectChunkID('BSC ');
+
+      const version = this.stream.readInt32();
+
+      let name = '';
+      if (version >= 1) {
+        const nameLength = this.stream.readInt32();
+        if (nameLength > 0 && nameLength < 1000) {
+          name = this.stream.readString(nameLength);
+        }
+      }
+
+      const color = this.stream.readUInt32();
+      const ambient = this.stream.readUInt32();
+      const flags = this.stream.readUInt32();
+
+      if (version >= 2) {
+        this.stream.readUInt32(); // flags2
+      }
+      if (version >= 3) {
+        this.stream.readUInt32(); // visFlags
+      }
+
+      this.stream.expectChunkID('VTXs');
+      const vertexCount = this.stream.readInt32();
+      this.log('info', `Sector has ${vertexCount} vertices`);
+
+      const vertices: Vector3[] = [];
+      for (let i = 0; i < vertexCount; i++) {
+        const x = this.stream.readFloat64();
+        const y = this.stream.readFloat64();
+        const z = this.stream.readFloat64();
+        vertices.push({ x, y, z });
+      }
+
+      this.stream.expectChunkID('PLNs');
+      const planeCount = this.stream.readInt32();
+      this.log('info', `Sector has ${planeCount} planes`);
+
+      for (let i = 0; i < planeCount; i++) {
+        this.stream.readFloat64(); // plane normal x
+        this.stream.readFloat64(); // plane normal y
+        this.stream.readFloat64(); // plane normal z
+        this.stream.readFloat64(); // plane distance
+      }
+
+      this.stream.expectChunkID('EDGs');
+      const edgeCount = this.stream.readInt32();
+      for (let i = 0; i < edgeCount; i++) {
+        this.stream.readInt32(); // vertex0 index
+        this.stream.readInt32(); // vertex1 index
+      }
+
+      this.stream.expectChunkID('BPOs');
+      const bpoVersion = this.stream.readInt32();
+      const polygonCount = this.stream.readInt32();
+      this.log('info', `Sector has ${polygonCount} polygons`);
+
+      const polygons: WldPolygon[] = [];
+      for (let i = 0; i < polygonCount; i++) {
+        const polygon = this.readBrushPolygon(bpoVersion, vertices);
+        if (polygon) {
+          polygons.push(polygon);
+        }
+      }
+
+      if (this.stream.peekChunkID().toString() === 'BSP0') {
+        this.stream.expectChunkID('BSP0');
+        this.skipBSPTree();
+      }
+
+      const sector: WldSector = {
+        name,
+        color,
+        ambient,
+        flags,
+        vertices,
+        polygons
+      };
+
+      this.log('success', `Sector read: ${polygons.length} polygons, ${vertices.length} vertices`);
+      return sector;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Could not read sector: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  private readBrushPolygon(version: number, vertices: Vector3[]): WldPolygon | null {
+    try {
+      this.stream.readInt32(); // plane index
+
+      let color = 0xFFFFFFFF;
+      let flags = 0;
+
+      if (version >= 2) {
+        color = this.stream.readUInt32();
+        flags = this.stream.readUInt32();
+
+        for (let i = 0; i < 3; i++) {
+          this.skipTexture();
+        }
+
+        this.stream.seek(8, 'current'); // properties
+      }
+
+      const edgeCount = this.stream.readInt32();
+      for (let i = 0; i < edgeCount; i++) {
+        this.stream.readInt32(); // edge index
+      }
+
+      let triangleVertices: number[] = [];
+      let triangleElements: number[] = [];
+
+      if (version >= 4) {
+        const vtxCount = this.stream.readInt32();
+        for (let i = 0; i < vtxCount; i++) {
+          triangleVertices.push(this.stream.readInt32());
+        }
+
+        const elemCount = this.stream.readInt32();
+        for (let i = 0; i < elemCount; i++) {
+          triangleElements.push(this.stream.readInt32());
+        }
+      }
+
+      this.skipShadowMap();
+
+      if (version >= 2) {
+        this.stream.readUInt32(); // shadow color
+      } else {
+        this.stream.readUInt8(); // dummy
+      }
+
+      const polygonVertices: Vector3[] = [];
+      for (const idx of triangleVertices) {
+        if (idx >= 0 && idx < vertices.length) {
+          polygonVertices.push(vertices[idx]);
+        }
+      }
+
+      const polygon: WldPolygon = {
+        vertices: polygonVertices,
+        indices: triangleElements,
+        color,
+        flags
+      };
+
+      return polygon;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  private skipTexture(): void {
+    const filenameLength = this.stream.readInt32();
+    if (filenameLength > 0 && filenameLength < 500) {
+      this.stream.seek(filenameLength, 'current');
+    }
+    this.stream.seek(64, 'current'); // mapping definition
+    this.stream.seek(8, 'current'); // texture properties
+  }
+
+  private skipShadowMap(): void {
+    try {
+      const smID = this.stream.peekChunkID();
+      if (smID.toString() === 'SHMP') {
+        this.stream.expectChunkID('SHMP');
+        const size = this.stream.readInt32();
+        if (size > 0 && size < 10000000) {
+          this.stream.seek(size, 'current');
+        }
+      }
+    } catch (error) {
+      // Shadow map is optional
+    }
+  }
+
+  private skipBSPTree(): void {
+    try {
+      const nodeCount = this.stream.readInt32();
+      if (nodeCount > 0 && nodeCount < 1000000) {
+        this.stream.seek(nodeCount * 48, 'current'); // Skip BSP nodes
+      }
+    } catch (error) {
+      this.log('warn', 'Could not skip BSP tree');
+    }
+  }
+
+  private skipPortalSectorLinks(): void {
+    try {
+      this.stream.expectChunkID('PSLS');
+      this.stream.readInt32(); // version
+      const chunkSize = this.stream.readInt32();
+
+      if (chunkSize > 0 && chunkSize < 100000000) {
+        this.stream.seek(chunkSize, 'current');
+      }
+
+      this.stream.expectChunkID('PSLE');
+    } catch (error) {
+      this.log('warn', 'Could not skip portal-sector links');
     }
   }
 

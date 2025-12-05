@@ -34,6 +34,34 @@ export function WorldInfo({ world, filename }: WorldInfoProps) {
             <span className="value">{world.brushes.length}</span>
           </div>
           <div className="stat">
+            <span className="label">Total Sectors:</span>
+            <span className="value">
+              {world.brushes.reduce((sum, brush) =>
+                sum + brush.mips.reduce((mipSum, mip) => mipSum + mip.sectors.length, 0), 0
+              )}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="label">Total Polygons:</span>
+            <span className="value">
+              {world.brushes.reduce((sum, brush) =>
+                sum + brush.mips.reduce((mipSum, mip) =>
+                  mipSum + mip.sectors.reduce((secSum, sec) => secSum + sec.polygons.length, 0), 0
+                ), 0
+              )}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="label">Total Vertices:</span>
+            <span className="value">
+              {world.brushes.reduce((sum, brush) =>
+                sum + brush.mips.reduce((mipSum, mip) =>
+                  mipSum + mip.sectors.reduce((secSum, sec) => secSum + sec.vertices.length, 0), 0
+                ), 0
+              )}
+            </span>
+          </div>
+          <div className="stat">
             <span className="label">Background Color:</span>
             <div
               className="color-box"
