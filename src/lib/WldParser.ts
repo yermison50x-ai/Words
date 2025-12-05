@@ -145,20 +145,39 @@ export class WldParser {
 
     if (nextChunk.toString() === 'WLIF') {
       this.readWorldInfo(world);
-    } else if (nextChunk.toString() === 'BRAR') {
-      this.readBrushArchive(world);
-    } else {
-      this.log('warn', 'No WLIF or BRAR chunk found, skipping');
     }
 
-    let dictionaryPosition = -1;
+    if (this.stream.peekChunkID().toString() === 'DIMP') {
+      this.log('info', 'Found DIMP (Dictionary Import), skipping');
+      this.stream.expectChunkID('DIMP');
+      const dimpSize = this.stream.readInt32();
+      if (dimpSize > 0 && dimpSize < 10000000) {
+        this.stream.seek(dimpSize, 'current');
+      }
+    }
 
-    const dposChunk = this.stream.peekChunkID();
-    if (dposChunk.toString() === 'DPOS') {
-      this.log('info', 'Found DPOS (Dictionary Position) chunk');
+    let brushDictionaryPosition = -1;
+    if (this.stream.peekChunkID().toString() === 'DPOS') {
+      this.log('info', 'Found DPOS (Dictionary Position) for brushes');
       this.stream.expectChunkID('DPOS');
-      dictionaryPosition = this.stream.readInt32();
-      this.log('info', `Dictionary stored at position: ${dictionaryPosition}`);
+      brushDictionaryPosition = this.stream.readInt32();
+      this.log('info', `Brush dictionary stored at position: ${brushDictionaryPosition}`);
+    }
+
+    if (this.stream.peekChunkID().toString() === 'BRAR') {
+      this.readBrushArchive(world);
+    } else {
+      this.log('warn', 'No BRAR chunk found after WLIF+DPOS, brushes section might be empty');
+    }
+
+    if (this.stream.peekChunkID().toString() === 'TRAR') {
+      this.log('info', 'Found TRAR (Terrain Archive), skipping');
+      this.skipTerrainArchive();
+    }
+
+    if (brushDictionaryPosition !== -1) {
+      this.log('info', 'Reading brush dictionary information...');
+      this.readDictionaryInfo(brushDictionaryPosition);
     }
 
     this.log('info', 'Searching for WSTA chunk in file...');
@@ -167,11 +186,6 @@ export class WldParser {
     if (wstaPosition !== -1) {
       this.log('success', `Found WSTA at position: ${wstaPosition}`);
       this.stream.setPosition(wstaPosition);
-
-      if (dictionaryPosition !== -1 && dictionaryPosition < wstaPosition) {
-        this.log('info', 'Reading dictionary information...');
-        this.readDictionaryInfo(dictionaryPosition);
-      }
     } else {
       this.log('error', 'Could not find WSTA chunk');
       throw new Error('WSTA chunk not found in file');
@@ -484,6 +498,66 @@ export class WldParser {
     }
   }
 
+  private skipTerrainArchive(): void {
+    try {
+      this.stream.expectChunkID('TRAR');
+      const terrainCount = this.stream.readInt32();
+      this.log('info', `Skipping ${terrainCount} terrains`);
+
+      for (let i = 0; i < terrainCount; i++) {
+        this.skipSingleTerrain();
+      }
+
+      if (this.stream.peekChunkID().toString() === 'EOTA') {
+        this.stream.expectChunkID('EOTA');
+        this.log('success', 'End of terrain archive (EOTA)');
+      }
+    } catch (error) {
+      this.log('warn', 'Could not skip terrain archive');
+    }
+  }
+
+  private skipSingleTerrain(): void {
+    try {
+      this.stream.expectChunkID('TRRN');
+
+      this.stream.readInt32(); // version
+
+      const nameLength = this.stream.readInt32();
+      if (nameLength > 0 && nameLength < 1000) {
+        this.stream.seek(nameLength, 'current');
+      }
+
+      this.stream.seek(8, 'current');
+
+      const sizeX = this.stream.readInt32();
+      const sizeY = this.stream.readInt32();
+
+      if (sizeX > 0 && sizeY > 0 && sizeX < 10000 && sizeY < 10000) {
+        const heightMapSize = sizeX * sizeY * 2;
+        this.stream.seek(heightMapSize, 'current');
+
+        const edgeMapSize = sizeX * sizeY;
+        this.stream.seek(edgeMapSize, 'current');
+      }
+
+      while (!this.stream.atEOF()) {
+        const nextChunk = this.stream.peekChunkID().toString();
+        if (nextChunk === 'TREN' || nextChunk === 'TRRN' ||
+            nextChunk === 'EOTA' || nextChunk === 'DPOS') {
+          break;
+        }
+        this.stream.readUInt8();
+      }
+
+      if (this.stream.peekChunkID().toString() === 'TREN') {
+        this.stream.expectChunkID('TREN');
+      }
+    } catch (error) {
+      this.log('warn', 'Could not skip single terrain');
+    }
+  }
+
   private findChunkInFile(chunkID: string): number {
     const fileSize = this.stream.getSize();
     const startPos = this.stream.getPosition();
@@ -566,6 +640,23 @@ export class WldParser {
 
   private readState(world: WldWorld): void {
     try {
+      if (this.stream.peekChunkID().toString() === 'DIMP') {
+        this.log('info', 'Found DIMP (Dictionary Import) before WSTA, skipping');
+        this.stream.expectChunkID('DIMP');
+        const dimpSize = this.stream.readInt32();
+        if (dimpSize > 0 && dimpSize < 10000000) {
+          this.stream.seek(dimpSize, 'current');
+        }
+      }
+
+      let stateDictionaryPosition = -1;
+      if (this.stream.peekChunkID().toString() === 'DPOS') {
+        this.log('info', 'Found DPOS (Dictionary Position) before WSTA');
+        this.stream.expectChunkID('DPOS');
+        stateDictionaryPosition = this.stream.readInt32();
+        this.log('info', `State dictionary stored at position: ${stateDictionaryPosition}`);
+      }
+
       this.log('info', 'Reading world state (WSTA)');
       this.stream.expectChunkID('WSTA');
 
@@ -577,7 +668,12 @@ export class WldParser {
       }
 
       world.backgroundColor = this.stream.readUInt32();
-      this.log('success', `Background color: #${world.backgroundColor.toString(16).padStart(6, '0')}`);
+      this.log('success', `Background color: #${world.backgroundColor.toString(16).padStart(8, '0')}`);
+
+      if (stateDictionaryPosition !== -1) {
+        this.log('info', 'Reading state dictionary information...');
+        this.readDictionaryInfo(stateDictionaryPosition);
+      }
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
