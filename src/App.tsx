@@ -57,12 +57,7 @@ function App() {
 
       <main className="app-main">
         {!world && !loading && (
-          <div className="upload-layout">
-            <FileUploader onFileLoad={handleFileLoad} />
-            {consoleMessages.length > 0 && (
-              <Console messages={consoleMessages} />
-            )}
-          </div>
+          <FileUploader onFileLoad={handleFileLoad} />
         )}
 
         {loading && (
@@ -73,36 +68,30 @@ function App() {
         )}
 
         {error && (
-          <div className="error-layout">
-            <div className="error">
-              <p>{error}</p>
-              <button onClick={() => { setError(''); setWorld(null); }}>Try Again</button>
-            </div>
-            {consoleMessages.length > 0 && (
-              <Console messages={consoleMessages} />
-            )}
+          <div className="error">
+            <p>{error}</p>
+            <button onClick={() => { setError(''); setWorld(null); }}>Try Again</button>
           </div>
         )}
 
         {world && (
-          <>
-            <div className="viewer-layout">
-              <aside className="sidebar">
-                <WorldInfo world={world} filename={filename} />
-                <button
-                  className="load-new-btn"
-                  onClick={() => { setWorld(null); setConsoleMessages([]); }}
-                >
-                  Load New File
-                </button>
-              </aside>
-              <div className="viewer-main">
-                <WldViewer world={world} />
-              </div>
+          <div className="viewer-layout">
+            <aside className="sidebar">
+              <WorldInfo world={world} filename={filename} />
+              <button
+                className="load-new-btn"
+                onClick={() => { setWorld(null); setConsoleMessages([]); }}
+              >
+                Load New File
+              </button>
+            </aside>
+            <div className="viewer-main">
+              <WldViewer world={world} />
             </div>
-            <Console messages={consoleMessages} />
-          </>
+          </div>
         )}
+
+        <Console messages={consoleMessages} />
       </main>
     </div>
   );

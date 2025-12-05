@@ -134,6 +134,103 @@ export class WldParser {
     } else {
       this.log('warn', 'No WLIF chunk found, skipping world info');
     }
+
+    this.skipDictionary();
+    this.skipBrushData();
+  }
+
+  private skipDictionary(): void {
+    try {
+      const nextChunk = this.stream.peekChunkID();
+
+      if (nextChunk.toString() === 'DPOS') {
+        this.log('info', 'Found DPOS (Dictionary Position) chunk');
+        this.stream.expectChunkID('DPOS');
+
+        const dictionaryPosition = this.stream.readInt32();
+        this.log('info', `Dictionary position: ${dictionaryPosition}`);
+
+        const currentPos = this.stream.getPosition();
+        this.log('info', `Current position: ${currentPos}, jumping to dictionary at ${dictionaryPosition}`);
+
+        this.stream.setPosition(dictionaryPosition);
+
+        this.stream.expectChunkID('DICT');
+        const fileNameCount = this.stream.readInt32();
+        this.log('info', `Dictionary contains ${fileNameCount} filenames`);
+
+        for (let i = 0; i < fileNameCount; i++) {
+          const fnLength = this.stream.readInt32();
+          if (fnLength > 0 && fnLength < 500) {
+            const filename = this.stream.readString(fnLength);
+            if (i < 3) {
+              this.log('info', `  File ${i + 1}: ${filename}`);
+            }
+          }
+        }
+
+        this.stream.expectChunkID('DEND');
+        this.log('success', 'Dictionary read complete, continuing to next section');
+      } else if (nextChunk.toString() === 'DIMP') {
+        this.log('info', 'Found DIMP (Dictionary Import) chunk');
+        this.stream.expectChunkID('DIMP');
+
+        const fnLength = this.stream.readInt32();
+        if (fnLength > 0 && fnLength < 500) {
+          const importFilename = this.stream.readString(fnLength);
+          this.log('info', `Importing dictionary from: ${importFilename}`);
+        }
+        const importOffset = this.stream.readInt32();
+        this.log('info', `Import offset: ${importOffset}`);
+
+        if (this.stream.peekChunkID().toString() === 'DPOS') {
+          this.skipDictionary();
+        }
+      } else {
+        this.log('info', 'No dictionary found, continuing');
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Error skipping dictionary: ${errorMsg}`);
+    }
+  }
+
+  private skipBrushData(): void {
+    try {
+      let chunkId = this.stream.peekChunkID().toString();
+
+      while (chunkId !== 'WSTA' && !this.stream.atEOF()) {
+        const chunk = this.stream.readChunkID();
+        this.log('info', `Skipping chunk: "${chunk.toString()}"`);
+
+        if (chunk.toString() === 'WSTA') {
+          this.stream.seek(-4, 'current');
+          break;
+        }
+
+        if (chunk.toString() === 'TRAR') {
+          this.log('info', 'Found terrain archive, skipping...');
+        }
+
+        const size = this.stream.readInt32();
+        this.log('info', `  Chunk size: ${size} bytes`);
+
+        if (size > 0 && size < this.stream.getSize()) {
+          this.stream.seek(size, 'current');
+        }
+
+        chunkId = this.stream.peekChunkID().toString();
+
+        if (chunkId === 'WSTA' || chunkId === 'WEND') {
+          break;
+        }
+      }
+
+      this.log('success', 'Brush data skipped successfully');
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.log('warn', `Error skipping brush data: ${errorMsg}`);
+    }
   }
 
   private readWorldInfo(world: WldWorld): void {
